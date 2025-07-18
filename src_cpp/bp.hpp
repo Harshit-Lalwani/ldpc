@@ -131,6 +131,46 @@ namespace ldpc {
                 // NotImplemented
             }
 
+            /**
+             * Resets iteration count, convergence flag, decoding/messages and LLRs to zero
+             * without reallocating, so the decoder can be reused across successive calls
+             * to `initialise_log_domain_bp(llr_vector)` + `bp_decode_cluster(...)`.
+             */
+            void reset() {
+                this->iterations = 0;
+                this->converge = false;
+
+                std::fill(this->decoding.begin(), this->decoding.end(), 0);
+                std::fill(this->candidate_syndrome.begin(), this->candidate_syndrome.end(), 0);
+                std::fill(this->log_prob_ratios.begin(), this->log_prob_ratios.end(), 0.0);
+                std::fill(this->initial_log_prob_ratios.begin(), this->initial_log_prob_ratios.end(), 0.0);
+
+                for (int i = 0; i < this->bit_count; i++) {
+                    for (auto &e: this->pcm.iterate_column(i)) {
+                        e.bit_to_check_msg = 0.0;
+                        e.check_to_bit_msg = 0.0;
+                    }
+                }
+            }
+
+            /**
+             * Seeds bit-to-check messages and log-probability ratios directly from an
+             * externally supplied per-bit channel LLR vector, bypassing `channel_probabilities`.
+             * This is an additive overload alongside the original no-arg
+             * `initialise_log_domain_bp()`; it does not change that method's behaviour.
+             */
+            void initialise_log_domain_bp(const std::vector<double> &llr_vector_channel) {
+                for (int i = 0; i < this->bit_count; i++) {
+                    this->initial_log_prob_ratios[i] = llr_vector_channel[i];
+                    this->log_prob_ratios[i] = llr_vector_channel[i];
+
+                    for (auto &e: this->pcm.iterate_column(i)) {
+                        e.bit_to_check_msg = llr_vector_channel[i];
+                        e.check_to_bit_msg = 0.0;
+                    }
+                }
+            }
+
             void initialise_log_domain_bp() {
                 // initialise BP
                 for (int i = 0; i < this->bit_count; i++) {

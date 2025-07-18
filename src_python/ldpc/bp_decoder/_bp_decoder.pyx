@@ -661,7 +661,39 @@ cdef class BpDecoder(BpDecoderBase):
         out = np.zeros(self.n,dtype=DTYPE)
         for i in range(self.n): out[i] = self.bpd.decoding[i]
         return out
-        
+
+    def reset(self):
+        """
+        Resets the decoder state (iterations, convergence, messages, LLRs) without
+        reallocating, so it can be reused across successive frames/episodes when
+        driving BP externally via `initialise_log_domain_bp`.
+        """
+        self.bpd.reset()
+
+    def initialise_log_domain_bp(self, llr_vector: np.ndarray):
+        """
+        Seeds the decoder's messages and LLRs directly from an externally supplied
+        per-bit channel LLR vector, bypassing `channel_probabilities`. Intended to be
+        paired with `reset()` and a cluster-scheduling extension of `decode()` for
+        driving BP one check-node cluster at a time.
+
+        Parameters
+        ----------
+        llr_vector : numpy.ndarray
+            A 1D array of channel log-likelihood ratios, length equal to the block
+            length `self.n`.
+        """
+        llr_array = np.ascontiguousarray(llr_vector, dtype=np.float64)
+        if llr_array.ndim != 1 or llr_array.shape[0] != self.n:
+            raise ValueError(f"The llr_vector must have length {self.n}.")
+
+        cdef int i
+        cdef vector[double] llr_cpp
+        llr_cpp.resize(self.n)
+        for i in range(self.n):
+            llr_cpp[i] = llr_array[i]
+
+        self.bpd.initialise_log_domain_bp(llr_cpp)
 
     @property
     def decoding(self) -> np.ndarray:
