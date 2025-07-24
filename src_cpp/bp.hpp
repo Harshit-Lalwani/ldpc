@@ -11,11 +11,23 @@
 #include <chrono>
 #include <stdexcept> // required for std::runtime_error
 #include <set>
+#include<iostream>
 
 #include "math.h"
 #include "sparse_matrix_base.hpp"
 #include "gf2sparse.hpp"
 #include "rng.hpp"
+
+void print_vector(const std::vector<double>& vec, const std::string& name) {
+            std::cout << name << ": [";
+            for (size_t i = 0; i < vec.size(); ++i) {
+                std::cout << vec[i];
+                if (i < vec.size() - 1) {
+                    std::cout << ", ";
+                }
+            }
+            std::cout << "]" << std::endl;
+        }
 
 namespace ldpc {
     namespace bp {
@@ -67,6 +79,7 @@ namespace ldpc {
             std::vector<double> initial_log_prob_ratios;
             std::vector<double> soft_syndrome;
             std::vector<int> serial_schedule_order;
+            std::vector<std::vector<int>> cluster_schedule;
             int iterations;
             int omp_thread_count;
             bool converge;
@@ -101,7 +114,7 @@ namespace ldpc {
                 this->random_schedule_seed = random_schedule_seed;
                 this->random_schedule_at_every_iteration = random_schedule_at_every_iteration;
                 this->bp_input_type = bp_input_type;
-
+                
 
                 if (this->channel_probabilities.size() != this->bit_count) {
                     throw std::runtime_error(
@@ -130,6 +143,7 @@ namespace ldpc {
                 // omp_set_num_threads(this->omp_thread_count);
                 // NotImplemented
             }
+            
 
             void initialise_log_domain_bp() {
                 // initialise BP
@@ -143,7 +157,9 @@ namespace ldpc {
                 }
             }
 
-            std::vector<uint8_t> decode(std::vector<uint8_t> &input_vector) {
+            std::vector<uint8_t> decode(
+                std::vector<uint8_t> &input_vector,
+                const std::vector<std::vector<int>> &external_schedule = std::vector<std::vector<int>>()) {
 
 
                 if ((this->bp_input_type == AUTO && input_vector.size() == this->bit_count) ||
@@ -176,7 +192,7 @@ namespace ldpc {
 
             }
 
-            std::vector<uint8_t> &bp_decode_parallel(std::vector<uint8_t> &syndrome) {
+            std::vector<uint8_t> &bp_decode_parallel_original(std::vector<uint8_t> &syndrome) {
 
                 this->converge = 0;
 
@@ -184,6 +200,8 @@ namespace ldpc {
 
                 //main interation loop
                 for (int it = 1; it <= this->maximum_iterations; it++) {
+                    
+                    print_vector(this->log_prob_ratios, "LLR");
 
                     if (this->bp_method == PRODUCT_SUM) {
                         for (int i = 0; i < this->check_count; i++) {
@@ -204,62 +222,7 @@ namespace ldpc {
                                 temp *= std::tanh(e.bit_to_check_msg / 2);
                             }
                         }
-                    } else if (this->bp_method == MINIMUM_SUM) {
-
-                        double alpha;
-                        if(this->ms_scaling_factor == 0.0) {
-                            alpha = 1.0 - std::pow(2.0, -1.0*it);
-                        }
-                        else {
-                            alpha = this->ms_scaling_factor;
-                        }
-
-                        //check to bit updates
-                        for (int i = 0; i < check_count; i++) {
-
-                            this->candidate_syndrome[i] = 0;
-                            int total_sgn = 0;
-                            int sgn = 0;
-                            total_sgn = syndrome[i];
-                            double temp = std::numeric_limits<double>::max();
-
-                            for (auto &e: this->pcm.iterate_row(i)) {
-                                if (e.bit_to_check_msg <= 0) {
-                                    total_sgn += 1;
-                                }
-                                e.check_to_bit_msg = temp;
-                                double abs_bit_to_check_msg = std::abs(e.bit_to_check_msg);
-                                if (abs_bit_to_check_msg < temp) {
-                                    temp = abs_bit_to_check_msg;
-                                }
-                            }
-
-                            temp = std::numeric_limits<double>::max();
-                            for (auto &e: this->pcm.reverse_iterate_row(i)) {
-                                sgn = total_sgn;
-                                if (e.bit_to_check_msg <= 0) {
-                                    sgn += 1;
-                                }
-                                if (temp < e.check_to_bit_msg) {
-                                    e.check_to_bit_msg = temp;
-                                }
-
-                                int message_sign = (sgn % 2 == 0) ? 1.0 : -1.0;
-                                
-                                e.check_to_bit_msg *= message_sign * alpha;
-
-                                
-                                double abs_bit_to_check_msg = std::abs(e.bit_to_check_msg);
-                                if (abs_bit_to_check_msg < temp) {
-                                    temp = abs_bit_to_check_msg;
-                                }
-
-                            }
-
-                        }
-                    }
-
-
+                    } 
                     //compute log probability ratios
                     for (int i = 0; i < this->bit_count; i++) {
                         double temp = initial_log_prob_ratios[i];
@@ -269,6 +232,105 @@ namespace ldpc {
                             // if(isnan(temp)) temp = e.bit_to_check_msg;
 
 
+                        }
+
+                        //make hard decision on basis of log probability ratio for bit i
+                        this->log_prob_ratios[i] = temp;
+                        // if(isnan(log_prob_ratios[i])) log_prob_ratios[i] = initial_log_prob_ratios[i];
+                        if (temp <= 0) {
+                            this->decoding[i] = 1;
+                            for (auto &e: this->pcm.iterate_column(i)) {
+                                this->candidate_syndrome[e.row_index] ^= 1;
+                            }
+                        } else {
+                            this->decoding[i] = 0;
+                        }
+                    }
+
+                    if (std::equal(candidate_syndrome.begin(), candidate_syndrome.end(), syndrome.begin())) {
+                        this->converge = true;
+                    }
+
+                    this->iterations = it;
+
+                    if (this->converge) {
+                        return this->decoding;
+                    }
+
+
+                    //compute bit to check update
+                    for (int i = 0; i < bit_count; i++) {
+                        double temp = 0;
+                        for (auto &e: this->pcm.reverse_iterate_column(i)) {
+                            e.bit_to_check_msg += temp;
+                            temp += e.check_to_bit_msg;
+                        }
+                    }
+
+                }
+
+
+                return this->decoding;
+
+            }
+            
+            std::vector<uint8_t> &bp_decode_parallel(
+                std::vector<uint8_t> &syndrome
+                ) {
+
+                this->converge = 0;                
+
+                this->initialise_log_domain_bp();
+                
+                //cluster schedule is a 2d vector of row indices
+                
+                std::vector<std::vector<int>> cluster_schedule;
+                cluster_schedule = {
+                    {2,4},
+                    {1},
+                    {0,3,5}
+                };
+
+                //main interation loop
+                for (int it = 0; it < this->maximum_iterations; it++) {
+                    print_vector(this->log_prob_ratios, "LLR");
+                    
+                    
+                    int sub_it = it % cluster_schedule.size();                    
+                    std::vector<int> row_list = cluster_schedule[sub_it];
+                    
+                    for (int j = 0; j<sub_it; j++){
+                        for (int index = 0; index < row_list.size(); index++) {
+                            
+                            int i = row_list[index];
+                            
+                            this->candidate_syndrome[i] = 0;
+
+                            double temp = 1.0;
+                            for (auto &e: this->pcm.iterate_row(i)) {
+                                e.check_to_bit_msg = temp;
+                                temp *= std::tanh(e.bit_to_check_msg / 2);
+                            }
+
+                            temp = 1;
+                            for (auto &e: this->pcm.reverse_iterate_row(i)) {
+                                e.check_to_bit_msg *= temp;
+                                int message_sign = syndrome[i] != 0u ? -1.0 : 1.0;
+                                e.check_to_bit_msg =
+                                        message_sign * std::log((1 + e.check_to_bit_msg) / (1 - e.check_to_bit_msg));
+                                temp *= std::tanh(e.bit_to_check_msg / 2);
+                            }
+                        }
+                        
+                    }
+ 
+                    //compute log probability ratios
+                    for (int i = 0; i < this->bit_count; i++) {
+                        double temp = initial_log_prob_ratios[i];
+                        for (auto &e: this->pcm.iterate_column(i)) {
+                            e.bit_to_check_msg = temp;
+                            temp += e.check_to_bit_msg;
+                            // if(isnan(temp)) temp = e.bit_to_check_msg;
                         }
 
                         //make hard decision on basis of log probability ratio for bit i

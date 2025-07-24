@@ -1,0 +1,24 @@
+Testing parallel cluster scheduling...
+PCM shape: (9, 10)
+PCM:
+[[1 1 0 0 0 0 0 0 0 0]
+ [0 1 1 0 0 0 0 0 0 0]
+ [0 0 1 1 0 0 0 0 0 0]
+ [0 0 0 1 1 0 0 0 0 0]
+ [0 0 0 0 1 1 0 0 0 0]
+ [0 0 0 0 0 1 1 0 0 0]
+ [0 0 0 0 0 0 1 1 0 0]
+ [0 0 0 0 0 0 0 1 1 0]
+ [0 0 0 0 0 0 0 0 1 1]]
+Note: This test is using the parallel schedule without custom clusters.
+      The cluster_schedule feature might need to be built/installed first.
+Decoder schedule: parallel
+Decoder BP method: product_sum
+Decoder max iterations: 10
+Error pattern: [0 0 0 0 0 0 0 1 1 1]
+Syndrome: [0 0 0 0 0 0 1 0 0]
+Decoding: [1 1 1 1 1 1 1 1 1 1]
+Corrected syndrome: [0 0 0 0 0 0 0 0 0]
+Converged: False
+Iterations used: 9
+Decoding successful: False
