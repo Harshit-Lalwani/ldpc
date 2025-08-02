@@ -215,6 +215,28 @@ class BpDecoderBase:
         """
 
     @property
+    def cluster_schedule(self) -> Union[None, List[List[int]]]:
+        """
+        Returns the cluster schedule.
+
+        Returns:
+            Union[None, List[List[int]]]: The cluster schedule as a list of lists, or None if no schedule has been set.
+        """
+
+    @cluster_schedule.setter
+    def cluster_schedule(self, value: Union[None, List[List[int]]]) -> None:
+        """
+        Sets the cluster schedule.
+
+        Args:
+            value (Union[None, List[List[int]]]): The cluster schedule to set. Each inner list represents 
+            a cluster containing check node indices.
+
+        Raises:
+            ValueError: If value contains invalid check indices.
+        """
+
+    @property
     def ms_scaling_factor(self) -> float:
         """Get the scaling factor for minimum sum method.
 
@@ -301,6 +323,9 @@ class BpDecoder(BpDecoderBase):
         The seed for the random serial schedule, by default 0. If set to 0, the seed is set according the system clock.
     serial_schedule_order : Optional[List[int]], optional
         The custom order for serial scheduling, by default None.
+    cluster_schedule : Optional[List[List[int]]], optional
+        The cluster schedule for parallel decoding. Each inner list represents a cluster containing 
+        check node indices. If None, defaults to a single cluster containing all check indices.
     input_vector_type: str, optional
         Use this paramter to specify the input type. Choose either: 1) 'syndrome' or 2) 'received_vector' or 3) 'auto'.
         Note, it is only necessary to specify this value when the parity check matrix is square. When the
@@ -310,13 +335,14 @@ class BpDecoder(BpDecoderBase):
     def __cinit__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
                  error_channel: Optional[Union[np.ndarray,List[float]]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
-                 random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", **kwargs): ...
+                 random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, 
+                 cluster_schedule: Optional[List[List[int]]] = None, input_vector_type: str = "auto", **kwargs): ...
 
     def __init__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
                  error_channel: Optional[Union[np.ndarray,List[float]]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None,
-                 input_vector_type: str = "auto", **kwargs): ...
+                 cluster_schedule: Optional[List[List[int]]] = None, input_vector_type: str = "auto", **kwargs): ...
 
     def decode(self, input_vector: np.ndarray) -> np.ndarray:
         """

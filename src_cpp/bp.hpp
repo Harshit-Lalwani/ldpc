@@ -80,6 +80,7 @@ namespace ldpc {
             std::vector<double> soft_syndrome;
             std::vector<int> serial_schedule_order;
             std::vector<std::vector<int>> cluster_schedule;
+            int num_clusters;
             int iterations;
             int omp_thread_count;
             bool converge;
@@ -98,7 +99,8 @@ namespace ldpc {
                     const std::vector<int> &serial_schedule = NULL_INT_VECTOR,
                     int random_schedule_seed = -1, // TODO what should be default here? 0 is set but -1 is checked in decode method?
                     bool random_schedule_at_every_iteration = true,
-                    BpInputType bp_input_type = AUTO) :
+                    BpInputType bp_input_type = AUTO,
+                    const std::vector<std::vector<int>> &cluster_schedule = std::vector<std::vector<int>>()) :
                     pcm(parity_check_matrix), channel_probabilities(std::move(channel_probabilities)),
                     check_count(pcm.m), bit_count(pcm.n), maximum_iterations(maximum_iterations), bp_method(bp_method),
                     schedule(schedule), ms_scaling_factor(min_sum_scaling_factor),
@@ -130,6 +132,23 @@ namespace ldpc {
                     }
                     this->rng_list_shuffle.seed(this->random_schedule_seed);
                 }
+
+                // Initialize cluster schedule
+                if (!cluster_schedule.empty()) {
+                    this->cluster_schedule = cluster_schedule;
+                } else {
+                    // Default: single cluster containing all check indices [0, 1, 2, ..., check_count-1]
+                    std::vector<int> default_cluster;
+                    default_cluster.resize(check_count);
+                    for (int i = 0; i < check_count; i++) {
+                        default_cluster[i] = i;
+                    }
+                    this->cluster_schedule.clear();
+                    this->cluster_schedule.push_back(default_cluster);
+                }
+
+                // Initialize num_clusters
+                this->num_clusters = this->cluster_schedule.size();
 
                 //Initialise OMP thread pool
                 // this->omp_thread_count = omp_threads;
@@ -274,52 +293,46 @@ namespace ldpc {
 
             }
             
-            std::vector<uint8_t> &bp_decode_parallel(
-                std::vector<uint8_t> &syndrome
-                ) {
-
+            std::vector<uint8_t> &bp_decode_parallel(std::vector<uint8_t> &syndrome){
                 this->converge = 0;                
 
                 this->initialise_log_domain_bp();
-                
-                //cluster schedule is a 2d vector of row indices
-                
-                std::vector<std::vector<int>> cluster_schedule;
-                cluster_schedule = {
-                    {2,4},
-                    {1},
-                    {0,3,5}
-                };
+                num_clusters = this->cluster_schedule.size();
 
-                //main interation loop
+                //main interation loop               
                 for (int it = 0; it < this->maximum_iterations; it++) {
-                    print_vector(this->log_prob_ratios, "LLR");
-                    
-                    
-                    int sub_it = it % cluster_schedule.size();                    
-                    std::vector<int> row_list = cluster_schedule[sub_it];
-                    
-                    for (int j = 0; j<sub_it; j++){
-                        for (int index = 0; index < row_list.size(); index++) {
-                            
-                            int i = row_list[index];
-                            
-                            this->candidate_syndrome[i] = 0;
+                    // print_vector(this->log_prob_ratios, "LLR");  // Commented out for less verbose output
+              
+                    std::vector<int> row_list = this->cluster_schedule[it % num_clusters];
+                        
+                    if (std::equal(candidate_syndrome.begin(), candidate_syndrome.end(), syndrome.begin())) {
+                    this->converge = true;
+                    }
 
-                            double temp = 1.0;
-                            for (auto &e: this->pcm.iterate_row(i)) {
-                                e.check_to_bit_msg = temp;
-                                temp *= std::tanh(e.bit_to_check_msg / 2);
-                            }
+                    this->iterations = it;
 
-                            temp = 1;
-                            for (auto &e: this->pcm.reverse_iterate_row(i)) {
-                                e.check_to_bit_msg *= temp;
-                                int message_sign = syndrome[i] != 0u ? -1.0 : 1.0;
-                                e.check_to_bit_msg =
-                                        message_sign * std::log((1 + e.check_to_bit_msg) / (1 - e.check_to_bit_msg));
-                                temp *= std::tanh(e.bit_to_check_msg / 2);
-                            }
+                    if (this->converge) {
+                        break;
+                    }
+                    for (int index = 0; index < row_list.size(); index++) {
+                        
+                        int i = row_list[index];
+                        
+                        this->candidate_syndrome[i] = 0;
+
+                        double temp = 1.0;
+                        for (auto &e: this->pcm.iterate_row(i)) {
+                            e.check_to_bit_msg = temp;
+                            temp *= std::tanh(e.bit_to_check_msg / 2);
+                        }
+
+                        temp = 1;
+                        for (auto &e: this->pcm.reverse_iterate_row(i)) {
+                            e.check_to_bit_msg *= temp;
+                            int message_sign = syndrome[i] != 0u ? -1.0 : 1.0;
+                            e.check_to_bit_msg =
+                                    message_sign * std::log((1 + e.check_to_bit_msg) / (1 - e.check_to_bit_msg));
+                            temp *= std::tanh(e.bit_to_check_msg / 2);
                         }
                         
                     }
@@ -344,18 +357,7 @@ namespace ldpc {
                         } else {
                             this->decoding[i] = 0;
                         }
-                    }
-
-                    if (std::equal(candidate_syndrome.begin(), candidate_syndrome.end(), syndrome.begin())) {
-                        this->converge = true;
-                    }
-
-                    this->iterations = it;
-
-                    if (this->converge) {
-                        return this->decoding;
-                    }
-
+                    }                   
 
                     //compute bit to check update
                     for (int i = 0; i < bit_count; i++) {
@@ -367,10 +369,8 @@ namespace ldpc {
                     }
 
                 }
-
-
+                
                 return this->decoding;
-
             }
 
             std::vector<uint8_t> &bp_decode_single_scan(std::vector<uint8_t> &syndrome) {
