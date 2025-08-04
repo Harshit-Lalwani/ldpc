@@ -9,6 +9,13 @@ ctypedef np.uint8_t uint8_t
 cdef extern from "bp.hpp" namespace "ldpc::bp":
     
     cdef const vector[int] NULL_INT_VECTOR
+    
+    # *   
+    cdef enum ClusterSchedulingType:
+        CUSTOM = 0
+        RANDOM = 1
+        ROUND_ROBIN = 2        
+    # *
 
     cdef enum BpMethod:
         PRODUCT_SUM = 0
@@ -49,6 +56,9 @@ cdef extern from "bp.hpp" namespace "ldpc::bp":
                 BpSparse& parity_check_matrix,
                 vector[double] channel_probabilities,
                 int maximum_iterations,
+                # *
+                ClusterSchedulingType cluster_scheduling_type,
+                # *                
                 BpMethod bp_method,
                 BpSchedule schedule,
                 double min_sum_scaling_factor,
@@ -63,6 +73,9 @@ cdef extern from "bp.hpp" namespace "ldpc::bp":
             int check_count
             int bit_count
             int maximum_iterations
+            # *
+            ClusterSchedulingType cluster_scheduling_type
+            # *
             BpMethod bp_method
             BpSchedule schedule
             double ms_scaling_factor

@@ -143,9 +143,9 @@ class MonteCarloBscSimulation:
             self.logical_error_rate_eb = np.sqrt(
                 self.logical_error_rate * (1 - self.logical_error_rate) / self.run_count
             )
-            pbar.set_description(
-                f"Physical error rate: {100*self.error_rate:.2f}%; Logical error rate: {100*self.logical_error_rate:.2f}+-{100*self.logical_error_rate_eb:.2f}%"
-            )
+            # pbar.set_description(
+            #     f"Physical error rate: {100*self.error_rate:.2f}%; Logical error rate: {100*self.logical_error_rate:.2f}+-{100*self.logical_error_rate_eb:.2f}%"
+            # )
         return self.save()
 
     def save(self):

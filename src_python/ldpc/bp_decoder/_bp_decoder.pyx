@@ -77,6 +77,17 @@ def io_test(pcm: Union[scipy.sparse.spmatrix,np.ndarray]):
     del cpcm
     return output
 
+cdef ClusterSchedulingType str_to_cluster_scheduling_type(str cluster_type):
+    """Convert string cluster scheduling type to enum value"""
+    if cluster_type.lower() in ['custom']:
+        return CUSTOM
+    elif cluster_type.lower() in ['random']:
+        return RANDOM
+    elif cluster_type.lower() in ['round_robin', 'roundrobin']:
+        return ROUND_ROBIN
+    else:
+        raise ValueError(f"Invalid cluster scheduling type: {cluster_type}. "
+                        f"Valid options are: 'custom', 'random', 'round_robin'")
 
 
 cdef class BpDecoderBase:
@@ -96,6 +107,7 @@ cdef class BpDecoderBase:
         omp_thread_count = kwargs.get("omp_thread_count", 1)
         random_schedule_seed = kwargs.get("random_schedule_seed", 0)
         serial_schedule_order = kwargs.get("serial_schedule_order", None)
+        cluster_scheduling_type = kwargs.get("cluster_scheduling_type", "custom")
         cluster_schedule = kwargs.get("cluster_schedule", None)
         channel_probs = kwargs.get("channel_probs", [None])
         
@@ -127,10 +139,11 @@ cdef class BpDecoderBase:
         self._serial_schedule_order = NULL_INT_VECTOR
         self._cluster_schedule.clear() # C++ vector for cluster schedule
 
-
+        # Convert cluster scheduling type string to enum
+        cdef ClusterSchedulingType cluster_sched_type = str_to_cluster_scheduling_type(cluster_scheduling_type)
 
         ## initialise the decoder with default values
-        self.bpd = new BpDecoderCpp(self.pcm[0],self._error_channel,0,PRODUCT_SUM,PARALLEL,1.0,1,self._serial_schedule_order,0,True,SYNDROME,self._cluster_schedule)
+        self.bpd = new BpDecoderCpp(self.pcm[0],self._error_channel,0,cluster_sched_type,PRODUCT_SUM,PARALLEL,1.0,1,self._serial_schedule_order,0,True,SYNDROME,self._cluster_schedule)
 
         ## set the decoder parameters
         self.bp_method = bp_method
@@ -531,6 +544,36 @@ cdef class BpDecoderBase:
         self.bpd.num_clusters = self.bpd.cluster_schedule.size()
 
     @property
+    def cluster_scheduling_type(self) -> str:
+        """
+        Returns the cluster scheduling type.
+
+        Returns:
+            str: The cluster scheduling type. Possible values are 'custom', 'random', or 'round_robin'.
+        """
+        if self.bpd.cluster_scheduling_type == CUSTOM:
+            return 'custom'
+        elif self.bpd.cluster_scheduling_type == RANDOM:
+            return 'random'
+        elif self.bpd.cluster_scheduling_type == ROUND_ROBIN:
+            return 'round_robin'
+        else:
+            raise ValueError(f"Invalid cluster scheduling type enum value: {self.bpd.cluster_scheduling_type}")
+
+    @cluster_scheduling_type.setter
+    def cluster_scheduling_type(self, value: str) -> None:
+        """
+        Sets the cluster scheduling type.
+
+        Args:
+            value (str): The cluster scheduling type to use. Possible values are 'custom', 'random', or 'round_robin'.
+
+        Raises:
+            ValueError: If value is not a valid option.
+        """
+        self.bpd.cluster_scheduling_type = str_to_cluster_scheduling_type(value)
+
+    @property
     def ms_scaling_factor(self) -> float:
         """Get the scaling factor for minimum sum method.
 
@@ -650,6 +693,7 @@ cdef class BpDecoder(BpDecoderBase):
                  error_channel: Optional[Union[np.ndarray,List[float]]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, 
+                 cluster_scheduling_type: Optional[str] = 'custom',
                  cluster_schedule: Optional[List[List[int]]] = None, input_vector_type: str = "auto", **kwargs):
 
         for key in kwargs.keys():
@@ -665,6 +709,7 @@ cdef class BpDecoder(BpDecoderBase):
                  error_channel: Optional[Union[np.ndarray,List[float]]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None,
+                 cluster_scheduling_type: Optional[str] = 'custom',
                  cluster_schedule: Optional[List[List[int]]] = None, input_vector_type: str = "auto", **kwargs):
         
         pass

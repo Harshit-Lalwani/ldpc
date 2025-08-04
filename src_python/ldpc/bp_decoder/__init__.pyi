@@ -8,7 +8,6 @@ import ldpc.helpers.scipy_helpers
 def io_test(pcm: Union[scipy.sparse.spmatrix,np.ndarray]): ...
 
 
-
 class BpDecoderBase:
 
     """
@@ -237,6 +236,27 @@ class BpDecoderBase:
         """
 
     @property
+    def cluster_scheduling_type(self) -> str:
+        """
+        Returns the cluster scheduling type.
+
+        Returns:
+            str: The cluster scheduling type. Possible values are 'custom', 'random', or 'round_robin'.
+        """
+
+    @cluster_scheduling_type.setter
+    def cluster_scheduling_type(self, value: str) -> None:
+        """
+        Sets the cluster scheduling type.
+
+        Args:
+            value (str): The cluster scheduling type to use. Possible values are 'custom', 'random', or 'round_robin'.
+
+        Raises:
+            ValueError: If value is not a valid option.
+        """
+
+    @property
     def ms_scaling_factor(self) -> float:
         """Get the scaling factor for minimum sum method.
 
@@ -336,12 +356,14 @@ class BpDecoder(BpDecoderBase):
                  error_channel: Optional[Union[np.ndarray,List[float]]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, 
+                 cluster_scheduling_type: Optional[str] = 'custom',
                  cluster_schedule: Optional[List[List[int]]] = None, input_vector_type: str = "auto", **kwargs): ...
 
     def __init__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
                  error_channel: Optional[Union[np.ndarray,List[float]]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None,
+                 cluster_scheduling_type: Optional[str] = 'custom',
                  cluster_schedule: Optional[List[List[int]]] = None, input_vector_type: str = "auto", **kwargs): ...
 
     def decode(self, input_vector: np.ndarray) -> np.ndarray:
