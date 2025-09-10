@@ -286,6 +286,25 @@ cdef class BpDecoderBase:
             out[i] = self.bpd.log_prob_ratios[i]
         return out
 
+    @log_prob_ratios.setter
+    def log_prob_ratios(self, value: np.ndarray) -> None:
+        """
+        Sets the current log probability ratio (LLR) vector directly. This is an
+        additive capability alongside the getter above: it lets external callers
+        (e.g. a cluster-scheduling loop) inject or overwrite the current LLR state
+        between calls to `decode_cluster`, without going through `channel_probabilities`.
+
+        Args:
+            value (np.ndarray): A 1D array of length equal to the block length `self.n`.
+
+        Raises:
+            ValueError: If `value` does not have length `self.n`.
+        """
+        if len(value) != self.n:
+            raise ValueError(f"Length mismatch: expected {self.n}, got {len(value)}")
+        for i in range(self.n):
+            self.bpd.log_prob_ratios[i] = value[i]
+
     @property
     def converge(self) -> bool:
         """
@@ -405,10 +424,12 @@ cdef class BpDecoderBase:
             return 'serial'
         elif self.bpd.schedule == SERIAL_RELATIVE:
             return 'serial_relative'
+        elif self.bpd.schedule == CLUSTER:
+            return 'cluster'
         else:
             raise ValueError(f"The BP schedule method is invalid. \
                     Please choose from the following methods: \
-                    'schedule=parallel', 'schedule=serial', 'schedule=serial_relative'")
+                    'schedule=parallel', 'schedule=serial', 'schedule=serial_relative', 'schedule=cluster'")
 
     @schedule.setter
     def schedule(self, value: Union[str,int]) -> None:
@@ -427,10 +448,12 @@ cdef class BpDecoderBase:
             self.bpd.schedule = SERIAL
         elif str(value).lower() in ['serial_relative', 'sr', '2']:
             self.bpd.schedule = SERIAL_RELATIVE
+        elif str(value).lower() in ['cluster', 'c', '3']:
+            self.bpd.schedule = CLUSTER
         else:
             raise ValueError(f"The BP schedule method '{value}' is invalid. \
                     Please choose from the following methods: \
-                    'schedule=parallel', 'schedule=serial', 'schedule=serial_relative'")
+                    'schedule=parallel', 'schedule=serial', 'schedule=serial_relative', 'schedule=cluster'")
 
     @property
     def serial_schedule_order(self) -> Union[None, np.ndarray]:
@@ -572,7 +595,7 @@ cdef class BpDecoder(BpDecoderBase):
     ms_scaling_factor : Optional[float], optional
         The scaling factor for the minimum sum method, by default 1.0.
     schedule : Optional[str], optional
-        The scheduling method for belief propagation: 'parallel', 'serial', or 'serial_relative'. By default 'parallel'.
+        The scheduling method for belief propagation: 'parallel', 'serial', 'serial_relative', or 'cluster'. By default 'parallel'.
     omp_thread_count : Optional[int], optional
         The number of OpenMP threads to use, by default 1.
     random_schedule_seed : Optional[int], optional
@@ -673,9 +696,9 @@ cdef class BpDecoder(BpDecoderBase):
     def initialise_log_domain_bp(self, llr_vector: np.ndarray):
         """
         Seeds the decoder's messages and LLRs directly from an externally supplied
-        per-bit channel LLR vector, bypassing `channel_probabilities`. Intended to be
-        paired with `reset()` and a cluster-scheduling extension of `decode()` for
-        driving BP one check-node cluster at a time.
+        per-bit channel LLR vector, bypassing `channel_probabilities`. Pair with
+        `reset()` and `decode_cluster(...)` to drive BP one check-node cluster at a
+        time instead of through `decode()`'s full parallel/serial sweep.
 
         Parameters
         ----------
@@ -694,6 +717,61 @@ cdef class BpDecoder(BpDecoderBase):
             llr_cpp[i] = llr_array[i]
 
         self.bpd.initialise_log_domain_bp(llr_cpp)
+
+    def decode_cluster(self, cluster_checks) -> np.ndarray:
+        """
+        Runs a single product-sum BP update restricted to the given subset of check
+        nodes, operating on the decoder's current LLR/message state (as seeded by
+        `initialise_log_domain_bp` and advanced by previous calls to this method).
+        This is a new entry point alongside `decode()`; it does not replace it.
+
+        Parameters
+        ----------
+        cluster_checks : array-like of int
+            Indices of the check (row) nodes to update in this call.
+
+        Returns
+        -------
+        numpy.ndarray
+            The updated log-probability-ratio (LLR) vector after this cluster update.
+        """
+        cluster_array = np.ascontiguousarray(cluster_checks, dtype=np.int32)
+        if cluster_array.ndim != 1:
+            raise ValueError("cluster_checks must be a 1D array or list of check indices")
+
+        cdef Py_ssize_t cluster_len = cluster_array.shape[0]
+        cdef vector[int] c_cluster
+        c_cluster.resize(cluster_len)
+
+        cdef Py_ssize_t i
+        for i in range(cluster_len):
+            idx = int(cluster_array[i])
+            if idx < 0 or idx >= self.m:
+                raise ValueError(f"cluster_checks[{i}]={idx} is out of range for {self.m} checks")
+            c_cluster[i] = idx
+
+        self.bpd.bp_decode_cluster(c_cluster)
+
+        out = np.zeros(self.n, dtype=np.float64)
+        for i in range(self.n):
+            out[i] = self.bpd.log_prob_ratios[i]
+        return out
+
+    def get_residuals(self) -> np.ndarray:
+        """
+        Returns the per-check-node residual: the maximum absolute change a check
+        node's outgoing messages would undergo if it were updated now, given the
+        current bit-to-check messages. Useful as a state/reward signal for
+        scheduling which cluster to update next; does not mutate decoder state.
+
+        Returns:
+            np.ndarray: A numpy array containing the residuals for each check node.
+        """
+        cdef vector[double] residuals = self.bpd.get_residuals()
+        out = np.zeros(self.m, dtype=np.float64)
+        for i in range(self.m):
+            out[i] = residuals[i]
+        return out
 
     @property
     def decoding(self) -> np.ndarray:

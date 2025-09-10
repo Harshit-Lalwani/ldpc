@@ -23,6 +23,7 @@ cdef extern from "bp.hpp" namespace "ldpc::bp":
         SERIAL = 0
         PARALLEL = 1
         SERIAL_RELATIVE = 2
+        CLUSTER = 3
 
     cdef cppclass BpEntry "ldpc::bp::BpEntry":
         BpEntry() except +
@@ -80,10 +81,12 @@ cdef extern from "bp.hpp" namespace "ldpc::bp":
             vector[uint8_t] soft_info_decode_serial(vector[double]& soft_syndrome, double cutoff, double sigma)
             void set_omp_thread_count(int count)
             BpInputType bp_input_type
-            # Additive: external-LLR decoding used by the cluster-scheduling extensions
-            # (does not alter the original decode() path).
+            # Additive: external-LLR / cluster-scheduled decoding used by the
+            # cluster-scheduling extensions (does not alter the original decode() path).
             void reset()
             void initialise_log_domain_bp(const vector[double] &llr_vector_channel)
+            void bp_decode_cluster(const vector[int] &cluster_checks)
+            vector[double] get_residuals()
 
 cdef class BpDecoderBase:
     cdef BpSparse *pcm

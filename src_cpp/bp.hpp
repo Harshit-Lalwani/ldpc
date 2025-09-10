@@ -28,7 +28,8 @@ namespace ldpc {
         enum BpSchedule {
             SERIAL = 0,
             PARALLEL = 1,
-            SERIAL_RELATIVE = 2
+            SERIAL_RELATIVE = 2,
+            CLUSTER = 3
         };
 
         enum BpInputType {
@@ -214,6 +215,159 @@ namespace ldpc {
                     return bp_decode_serial(input_vector);
                 } else { throw std::runtime_error("Invalid BP schedule"); }
 
+            }
+
+            /**
+             * Runs a single product-sum BP update restricted to the given subset of check
+             * nodes (`cluster_checks`), operating on the current `log_prob_ratios`/message
+             * state (seeded via `initialise_log_domain_bp(llr_vector)` and advanced via
+             * repeated calls to this method, typically interleaved across several clusters
+             * per "iteration"). This is a new, additive entry point alongside the existing
+             * `decode()`/`bp_decode_parallel()`/`bp_decode_serial()` schedules; it does not
+             * replace or alter them.
+             */
+            void bp_decode_cluster(const std::vector<int> &cluster_checks) {
+                if (cluster_checks.empty()) {
+                    return;
+                }
+
+                std::vector<uint8_t> check_mask(check_count, 0);
+                for (int check_index: cluster_checks) {
+                    if (check_index < 0 || check_index >= check_count) {
+                        throw std::runtime_error("Cluster contains invalid check index");
+                    }
+                    check_mask[check_index] = 1;
+                }
+
+                const double EPS_TANH = 1e-12;
+
+                for (int col = 0; col < this->bit_count; ++col) {
+                    for (auto &edge: pcm.iterate_column(col)) {
+                        if (check_mask[edge.row_index]) {
+                            edge.bit_to_check_msg = this->log_prob_ratios[col] - edge.check_to_bit_msg;
+                        }
+                    }
+                }
+
+                if (bp_method == PRODUCT_SUM) {
+                    for (int check_index: cluster_checks) {
+                        double Am = 0.0;
+                        for (auto &edge: pcm.iterate_row(check_index)) {
+                            double t = std::tanh(edge.bit_to_check_msg / 2.0);
+                            if (std::abs(t) < EPS_TANH) {
+                                t = (t >= 0) ? EPS_TANH : -EPS_TANH;
+                            }
+                            Am += std::log(std::abs(t));
+                        }
+
+                        int sm = 1;
+                        for (auto &edge: pcm.iterate_row(check_index)) {
+                            if (edge.bit_to_check_msg < 0.0) {
+                                sm = -sm;
+                            }
+                        }
+
+                        for (auto &edge: pcm.iterate_row(check_index)) {
+                            double oldR = edge.check_to_bit_msg;
+
+                            double t_self = std::tanh(edge.bit_to_check_msg / 2.0);
+                            if (std::abs(t_self) < EPS_TANH) {
+                                t_self = (t_self >= 0.0 ? EPS_TANH : -EPS_TANH);
+                            }
+
+                            double log_abs_t_self = std::log(std::abs(t_self));
+                            double temp = Am - log_abs_t_self;
+
+                            int sign_Lmj = (edge.bit_to_check_msg < 0.0) ? -1 : 1;
+                            int sign_factor = sm * sign_Lmj;
+                            double prod_others = sign_factor * std::exp(temp);
+
+                            if (prod_others > 1.0 - 1e-15) {
+                                prod_others = 1.0 - 1e-15;
+                            }
+                            if (prod_others < -1.0 + 1e-15) {
+                                prod_others = -1.0 + 1e-15;
+                            }
+
+                            double newR = std::log((1.0 + prod_others) / (1.0 - prod_others));
+
+                            if (!std::isfinite(newR)) {
+                                if (std::isnan(newR)) {
+                                    newR = 0.0;
+                                } else if (newR > 1e300) {
+                                    newR = 1e300;
+                                } else if (newR < -1e300) {
+                                    newR = -1e300;
+                                }
+                            }
+
+                            edge.check_to_bit_msg = newR;
+                            this->log_prob_ratios[edge.col_index] += (newR - oldR);
+                        }
+                    }
+                } else {
+                    throw std::runtime_error("Cluster decoding with Minimum-Sum method is not yet implemented");
+                }
+            }
+
+            /**
+             * Per-check-node residual: the maximum absolute change a check node's outgoing
+             * messages would undergo if it were updated now, given the current
+             * bit-to-check messages. Used as a state/reward signal for scheduling which
+             * cluster to update next; does not mutate decoder state.
+             */
+            std::vector<double> get_residuals() {
+                std::vector<double> residuals(this->check_count, 0.0);
+
+                if (this->bp_method == PRODUCT_SUM) {
+                    for (int row = 0; row < this->check_count; ++row) {
+                        double max_residual = 0.0;
+                        const double EPS_TANH = 1e-12;
+                        double Am = 0.0;
+                        int sm = 1;
+                        for (auto &edge: pcm.iterate_row(row)) {
+                            double t = std::tanh(edge.bit_to_check_msg / 2.0);
+                            if (std::abs(t) < EPS_TANH) {
+                                t = (t >= 0) ? EPS_TANH : -EPS_TANH;
+                            }
+                            Am += std::log(std::abs(t));
+                            if (edge.bit_to_check_msg < 0.0) sm = -sm;
+                        }
+
+                        for (auto &edge: pcm.iterate_row(row)) {
+                            double old_msg = edge.check_to_bit_msg;
+
+                            double t_self = std::tanh(edge.bit_to_check_msg / 2.0);
+                            if (std::abs(t_self) < EPS_TANH) {
+                                t_self = (t_self >= 0.0 ? EPS_TANH : -EPS_TANH);
+                            }
+                            double log_abs_t_self = std::log(std::abs(t_self));
+                            double temp = Am - log_abs_t_self;
+
+                            int sign_Lmj = (edge.bit_to_check_msg < 0.0) ? -1 : 1;
+                            int sign_factor = sm * sign_Lmj;
+                            double prod_others = sign_factor * std::exp(temp);
+
+                            if (prod_others > 1.0 - 1e-15) {
+                                prod_others = 1.0 - 1e-15;
+                            }
+                            if (prod_others < -1.0 + 1e-15) {
+                                prod_others = -1.0 + 1e-15;
+                            }
+
+                            double new_msg = std::log((1.0 + prod_others) / (1.0 - prod_others));
+                            double residual = std::abs(new_msg - old_msg);
+                            if (residual > max_residual) {
+                                max_residual = residual;
+                            }
+                        }
+                        residuals[row] = max_residual;
+                    }
+                } else if (this->bp_method == MINIMUM_SUM) {
+                    throw std::runtime_error("Minsum is not implemented yet");
+                }
+
+                return residuals;
             }
 
             std::vector<uint8_t> &bp_decode_parallel(std::vector<uint8_t> &syndrome) {
