@@ -370,6 +370,169 @@ namespace ldpc {
                 return residuals;
             }
 
+            /**
+             * Gaussian-approximation J-function (EXIT-chart mutual information as a
+             * function of the LLR channel standard deviation), per ten Brink's
+             * approximation. Used by `m2i2_scheduler`.
+             */
+            double J_func(const double sigma) {
+                double mi = 0.0;
+
+                if (sigma >= 10) {
+                    mi = 1.0;
+                }
+                else if (sigma > 1.6363) {
+                    mi = 1.0 - std::exp(0.001815 * sigma * sigma * sigma - 0.142675 * sigma * sigma - 0.082205 * sigma + 0.054960);
+                }
+                else {
+                    mi = -0.0421061 * sigma * sigma * sigma + 0.209252 * sigma * sigma - 0.00640081 * sigma;
+                }
+
+                return mi;
+            }
+
+            /** Inverse of `J_func`: recovers the LLR standard deviation from a mutual information value. */
+            double J_inv_func(const double mi) {
+                double sigma = 0.0;
+
+                if (mi <= 0.3646) {
+                    sigma = 1.09542 * mi * mi + 0.214217 * mi + 2.33727 * std::sqrt(mi);
+                }
+
+                else {
+                    sigma = -0.706692 * std::log(0.386013 * (1.0 - mi)) - 1.75017 * mi;
+                }
+
+                return sigma;
+            }
+
+            /**
+             * Computes a check-node update schedule for a base (protograph) matrix `P`
+             * using EXIT-chart mutual-information tracking (the "M2I2" heuristic):
+             * greedily orders check-node updates by expected mutual-information gain
+             * under a Gaussian-approximation BP model, given the code rate and channel
+             * Eb/N0. Independent of the main decode()/bp_decode_cluster() message-passing
+             * state; operates purely on the supplied base matrix and EXIT-chart model.
+             */
+            std::vector<int> m2i2_scheduler(const std::vector<std::vector<int>> &P, double code_rate, double EbN0, int max_iterations) {
+                std::vector<int> schedule;
+
+                int Mp = P.size();
+                if (Mp == 0) {
+                    throw std::runtime_error("Base matrix P is empty");
+                }
+                int Np = P[0].size();
+
+                std::vector<std::vector<int>> u(Mp, std::vector<int>(Np, 0));
+                std::vector<std::vector<double>> I_EC(Mp, std::vector<double>(Np, 0.0));
+                std::vector<std::vector<double>> I_EV(Mp, std::vector<double>(Np, 0.0));
+                std::vector<double> I_ch(Np, 0.0);
+                std::vector<std::vector<double>> Ip_EC(Mp, std::vector<double>(Np, 0.0));
+                std::vector<double> R_cluster(Mp, 0.0);
+                std::vector<double> I_CMI(Np, 0.0);
+
+                double sigma_ch = std::sqrt(8.0 * code_rate * EbN0);
+                for (int j = 0; j < Np; ++j) {
+                    I_ch[j] = J_func(sigma_ch);
+                }
+
+                for (int i = 0; i < Mp; ++i) {
+                    for (int j = 0; j < Np; ++j) {
+                        if (P[i][j] != -1) {
+                            I_EV[i][j] = I_ch[j];
+                        }
+                    }
+                }
+                while (schedule.size() < max_iterations) {
+                    for (int i = 0; i < Mp; ++i) {
+                        for (int j = 0; j < Np; ++j) {
+                            if (P[i][j] != -1) {
+                                double sum_sq = 0.0;
+                                for (int b = 0; b < Np; ++b) {
+                                    if (b != j && P[i][b] != -1) {
+                                        double ji = J_inv_func(1.0 - I_EV[i][b]);
+                                        sum_sq += ji * ji;
+                                    }
+                                }
+                                Ip_EC[i][j] = 1.0 - J_func(std::sqrt(sum_sq));
+                            }
+                        }
+                    }
+
+                    for (int i = 0; i < Mp; ++i) {
+                        R_cluster[i] = 0.0;
+                        for (int j = 0; j < Np; ++j) {
+                            if (P[i][j] != -1) {
+                                R_cluster[i] += Ip_EC[i][j] - I_EC[i][j];
+                            }
+                        }
+                    }
+
+                    int i_star = 0;
+                    double max_increase = R_cluster[0];
+                    for (int i = 1; i < Mp; ++i) {
+                        if (R_cluster[i] > max_increase) {
+                            max_increase = R_cluster[i];
+                            i_star = i;
+                        }
+                    }
+
+                    schedule.push_back(i_star);
+
+                    for (int j = 0; j < Np; ++j) {
+                        if (P[i_star][j] != -1) {
+                            I_EC[i_star][j] = Ip_EC[i_star][j];
+                            u[i_star][j] += 1;
+                        }
+                    }
+
+                    for (int j = 0; j < Np; ++j) {
+                        if (P[i_star][j] != -1) {
+                            for (int a = 0; a < Mp; ++a) {
+                                if (P[a][j] != -1) {
+                                    double sum_sq = 0.0;
+                                    for (int c = 0; c < Mp; ++c) {
+                                        if (c != a && P[c][j] != -1) {
+                                            double ji = J_inv_func(I_EC[c][j]);
+                                            sum_sq += ji * ji;
+                                        }
+                                    }
+
+                                    double ji_ch = J_inv_func(I_ch[j]);
+                                    sum_sq += ji_ch * ji_ch;
+                                    I_EV[a][j] = J_func(std::sqrt(sum_sq));
+                                }
+                            }
+                        }
+                    }
+
+                    bool converged = true;
+                    for (int j = 0; j < Np; ++j) {
+                        double sum_sq = 0.0;
+                        for (int a = 0; a < Mp; ++a) {
+                            if (P[a][j] != -1) {
+                                double ji = J_inv_func(I_EC[a][j]);
+                                sum_sq += ji * ji;
+                            }
+                        }
+
+                        double ji_ch = J_inv_func(I_ch[j]);
+                        sum_sq += ji_ch * ji_ch;
+                        I_CMI[j] = J_func(std::sqrt(sum_sq));
+
+                        if (I_CMI[j] < 1.0) {
+                            converged = false;
+                        }
+                    }
+
+                    if (converged) {
+                        break;
+                    }
+                }
+
+                return schedule;
+            }
+
             std::vector<uint8_t> &bp_decode_parallel(std::vector<uint8_t> &syndrome) {
 
                 this->converge = 0;

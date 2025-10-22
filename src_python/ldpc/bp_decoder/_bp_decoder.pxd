@@ -87,6 +87,7 @@ cdef extern from "bp.hpp" namespace "ldpc::bp":
             void initialise_log_domain_bp(const vector[double] &llr_vector_channel)
             void bp_decode_cluster(const vector[int] &cluster_checks)
             vector[double] get_residuals()
+            vector[int] m2i2_scheduler(const vector[vector[int]] &P, double code_rate, double EbN0, int max_iterations)
 
 cdef class BpDecoderBase:
     cdef BpSparse *pcm
