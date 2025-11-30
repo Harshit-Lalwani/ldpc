@@ -7,6 +7,7 @@ from ldpc.bposd_decoder import BpOsdDecoder
 from ldpc.bp_decoder import SoftInfoBpDecoder
 from ldpc.belief_find_decoder import BeliefFindDecoder
 from ldpc.sinter_decoders import SinterBpOsdDecoder
+from ldpc.rbl_bp_decoder import RBLBPDecoder
 
 # Legacy syntax
 from ldpc.bp_decoder import bp_decoder
