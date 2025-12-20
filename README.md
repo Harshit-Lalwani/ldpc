@@ -87,6 +87,69 @@ decoding_syndrome = H@decoding % 2
 print(f"Decoding syndrome: {decoding_syndrome}")
 ``` 
 
+## Cluster Scheduling & Residual BP (research extensions)
+
+This fork adds a set of research extensions to `BpDecoder` for driving belief
+propagation one check-node cluster at a time — useful for scheduling policies
+(e.g. reinforcement-learning agents) that decide which cluster to update next,
+instead of a fixed parallel/serial sweep. All additions are purely additive:
+the original constructor, `decode()`, and the `parallel`/`serial`/`serial_relative`
+schedules are unchanged.
+
+- `BpDecoder.reset()` — clears iteration count, convergence, messages and LLRs
+  without reallocating, so the decoder can be reused across frames.
+- `BpDecoder.initialise_log_domain_bp(llr_vector)` — seeds messages/LLRs from an
+  externally supplied channel LLR vector, bypassing `channel_probabilities`.
+- `BpDecoder.decode_cluster(cluster_checks)` — runs a single product-sum BP
+  update restricted to the given subset of check nodes, and returns the
+  updated LLR vector. Also available as `schedule = 'cluster'`.
+- `BpDecoder.get_residuals()` — per-check-node residual (the max message
+  change a check would undergo if updated now); useful as a scheduling signal.
+- `BpDecoder.log_prob_ratios` now also has a setter, so external state can be
+  written between cluster updates.
+- `BpDecoder.m2i2_scheduler(P, code_rate, EbN0, max_iterations)` — an EXIT-chart,
+  mutual-information-based scheduler ("M2I2") that greedily orders check-node
+  updates for a base (protograph) matrix by expected MI gain under a
+  Gaussian-approximation BP model.
+- `ldpc.rbl_bp_decoder.RBLBPDecoder` — a standalone decoder implementing a
+  residual/relaxed BP variant with a growing "active variable" window: bits
+  are only updated once their `|LLR|` drops below a threshold that increases
+  each iteration.
+
+### Cluster scheduling quickstart
+
+```python
+import numpy as np
+from ldpc.codes import rep_code
+from ldpc.bp_decoder import BpDecoder
+
+H = rep_code(5)
+bpd = BpDecoder(H, error_rate=0.1, max_iter=1)
+
+llr = np.array([2.0, 2.0, -2.0, 2.0, 2.0])  # channel LLRs
+bpd.reset()
+bpd.initialise_log_domain_bp(llr)
+
+# Update one check-node cluster at a time (e.g. chosen by a scheduling policy)
+for cluster in [[0], [1], [2], [3]]:
+    updated_llr = bpd.decode_cluster(cluster)
+    residuals = bpd.get_residuals()  # use as a scheduling signal
+```
+
+### RBL decoder quickstart
+
+```python
+import numpy as np
+from ldpc.codes import rep_code
+from ldpc.rbl_bp_decoder import RBLBPDecoder
+
+H = rep_code(5)
+decoder = RBLBPDecoder(H, max_iter=50, alpha=0.5)
+
+llr = np.array([2.0, 2.0, -2.0, 2.0, 2.0])
+decoded = decoder.decode(llr)
+```
+
 ## Attribution
 
 If you use this software in your research please cite as follows:
