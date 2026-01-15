@@ -61,6 +61,18 @@ class BpDecoderBase:
         Returns:
             np.ndarray: A numpy array containing the current log probability ratio vector.
         """
+    @log_prob_ratios.setter
+    def log_prob_ratios(self, value: np.ndarray) -> None:
+        """
+        Sets the current log probability ratio (LLR) vector directly. This is an
+        additive capability alongside the getter above: it lets external callers
+        (e.g. a cluster-scheduling loop) inject or overwrite the current LLR state
+        between calls to `decode_cluster`, without going through `channel_probabilities`.
+        Args:
+            value (np.ndarray): A 1D array of length equal to the block length `self.n`.
+        Raises:
+            ValueError: If `value` does not have length `self.n`.
+        """
     @property
     def converge(self) -> bool:
         """
@@ -218,7 +230,7 @@ class BpDecoder(BpDecoderBase):
     ms_scaling_factor : Optional[float], optional
         The scaling factor for the minimum sum method, by default 1.0.
     schedule : Optional[str], optional
-        The scheduling method for belief propagation: 'parallel', 'serial', or 'serial_relative'. By default 'parallel'.
+        The scheduling method for belief propagation: 'parallel', 'serial', 'serial_relative', or 'cluster'. By default 'parallel'.
     omp_thread_count : Optional[int], optional
         The number of OpenMP threads to use, by default 1.
     random_schedule_seed : Optional[int], optional
@@ -246,6 +258,71 @@ class BpDecoder(BpDecoderBase):
         ------
         ValueError
             If the length of the input input_vector does not match the number of rows in the parity check matrix.
+        """
+    def reset(self):
+        """
+        Resets the decoder state (iterations, convergence, messages, LLRs) without
+        reallocating, so it can be reused across successive frames/episodes when
+        driving BP externally via `initialise_log_domain_bp`.
+        """
+    def initialise_log_domain_bp(self, llr_vector: np.ndarray):
+        """
+        Seeds the decoder's messages and LLRs directly from an externally supplied
+        per-bit channel LLR vector, bypassing `channel_probabilities`. Pair with
+        `reset()` and `decode_cluster(...)` to drive BP one check-node cluster at a
+        time instead of through `decode()`'s full parallel/serial sweep.
+        Parameters
+        ----------
+        llr_vector : numpy.ndarray
+            A 1D array of channel log-likelihood ratios, length equal to the block
+            length `self.n`.
+        """
+    def decode_cluster(self, cluster_checks) -> np.ndarray:
+        """
+        Runs a single product-sum BP update restricted to the given subset of check
+        nodes, operating on the decoder's current LLR/message state (as seeded by
+        `initialise_log_domain_bp` and advanced by previous calls to this method).
+        This is a new entry point alongside `decode()`; it does not replace it.
+        Parameters
+        ----------
+        cluster_checks : array-like of int
+            Indices of the check (row) nodes to update in this call.
+        Returns
+        -------
+        numpy.ndarray
+            The updated log-probability-ratio (LLR) vector after this cluster update.
+        """
+    def get_residuals(self) -> np.ndarray:
+        """
+        Returns the per-check-node residual: the maximum absolute change a check
+        node's outgoing messages would undergo if it were updated now, given the
+        current bit-to-check messages. Useful as a state/reward signal for
+        scheduling which cluster to update next; does not mutate decoder state.
+        Returns:
+            np.ndarray: A numpy array containing the residuals for each check node.
+        """
+    def m2i2_scheduler(self, P, code_rate: float, EbN0: float, max_iterations: int) -> np.ndarray:
+        """
+        Computes a check-node update schedule for a base (protograph) matrix using
+        EXIT-chart mutual-information tracking (the "M2I2" heuristic): greedily
+        orders check-node updates by expected mutual-information gain under a
+        Gaussian-approximation BP model. Independent of `decode()`/`decode_cluster()`
+        message-passing state; operates purely on the supplied base matrix and
+        EXIT-chart model.
+        Parameters
+        ----------
+        P : array-like (Mp x Np)
+            Base matrix entries (values of -1 indicate no edge).
+        code_rate : float
+            Code rate R.
+        EbN0 : float
+            Energy-per-bit to noise density ratio.
+        max_iterations : int
+            Maximum number of iterations for the schedule.
+        Returns
+        -------
+        np.ndarray (int32)
+            The schedule as a 1D array of check indices.
         """
     @property
     def decoding(self) -> np.ndarray:
